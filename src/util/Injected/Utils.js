@@ -15,12 +15,44 @@ exports.LoadUtils = () => {
     };
 
     window.WWebJS.sendSeen = async (chatId) => {
-        const chat = await window.WWebJS.getChat(chatId, { getAsModel: false });
-        if (chat) {
-            await window.Store.SendSeen.sendSeen(chat);
-            return true;
+        const chat = window.Store.Chat.get(chatId);
+        if (!chat) {
+            return false;
         }
-        return false;
+        try {
+            // Check stream availability with correct properties
+            const streamAvailable = window.Store.Stream ?
+                (window.Store.Stream.available !== false) :
+                (window.Store.Conn && window.Store.Conn.state === 'CONNECTED');
+
+            // First try basic sendSeen operation
+            const additionalOperations = [window.Store.SendSeen.sendSeen(chat, false)];
+
+            // If stream is available, also try dual system
+            if (streamAvailable) {
+                // Delivery confirmation (receipt) - the missing part
+                if (window.Store.SendReceipt && window.Store.SendReceipt.sendAggregateReceipts) {
+                    additionalOperations.push(
+                        window.Store.SendReceipt.sendAggregateReceipts({
+                            type: window.Store.SendReceipt.RECEIPT_TYPE?.READ || 'read',
+                            chatId: chatId
+                        })
+                    );
+                } else if (window.Store.MessageReceiptBatcher && window.Store.MessageReceiptBatcher.receiptBatcher) {
+                    // Fallback using MessageReceiptBatcher
+                    additionalOperations.push(
+                        window.Store.MessageReceiptBatcher.receiptBatcher.acceptOtherReceipt({
+                            chatId: chatId,
+                            type: 'read'
+                        })
+                    );
+                }
+                await Promise.all(additionalOperations);
+            }
+            return true;
+        } catch (error) {
+            return false;
+        }
     };
 
     window.WWebJS.sendMessage = async (chat, content, options = {}) => {
